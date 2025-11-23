@@ -30,11 +30,13 @@ def get_coordinates_from_city(city_name):
         data = response.json()
         if "results" in data:
             result = data["results"][0]
-            # *** AGGIUNTO IL RITORNO DELL'ALTEZZA (elevation) ***
+            # Percorso di SUCCESSO: Restituisce 5 valori
             return result["latitude"], result["longitude"], result["name"], result.get("country", ""), result.get("elevation", 0)
         else:
+            # Percorso di FALLIMENTO (Città non trovata): Restituisce 5 valori
             return None, None, None, None, 0
     except Exception:
+        # Percorso di ECCEZIONE (Errore di rete): Restituisce 5 valori
         return None, None, None, None, 0
 
 @st.cache_data(ttl=3600)
