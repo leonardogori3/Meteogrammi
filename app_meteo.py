@@ -7,12 +7,16 @@ from matplotlib.ticker import MultipleLocator
 from datetime import date, timedelta
 import io
 import sys
+import numpy as np
 
-# --- CONFIGURAZIONE PAGINA ---
+# --- CONFIGURAZIONI GLOBALI ---
 st.set_page_config(layout="wide", page_title="Meteogrammi") 
 plt.rcParams['figure.dpi'] = 300 
 plt.rcParams['figure.figsize'] = [12, 28] 
-
+try:
+    plt.style.use('seaborn-v0_8-darkgrid')
+except:
+    plt.style.use('ggplot')
 
 # --- FUNZIONI DI SERVIZIO ---
 
@@ -35,8 +39,8 @@ def get_coordinates_from_city(city_name):
 @st.cache_data(ttl=3600)
 def fetch_and_process_data(LAT, LON, start_d, end_d):
     """
-    Scarica i dati meteo, trova la lunghezza minima comune e crea il DataFrame.
-    (FIX: Risolve ValueError: All arrays must be of the same length)
+    Scarica i dati meteo, tronca gli array alla lunghezza minima e crea il DataFrame.
+    Inclusi i tre strati nuvolosi (low, mid, high).
     """
 
     url = "https://api.open-meteo.com/v1/forecast"
@@ -44,7 +48,7 @@ def fetch_and_process_data(LAT, LON, start_d, end_d):
     params = {
         "latitude": LAT,
         "longitude": LON,
-        # Variabili necessarie per il meteogramma:
+        # Variabili strettamente necessarie per il grafico (inclusi i 3 strati nuvolosi)
         "hourly": "temperature_2m,dew_point_2m,relative_humidity_2m,cloud_cover_low,cloud_cover_mid,cloud_cover_high,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m,rain,snowfall,freezing_level_height",
         "timezone": "Europe/Rome",
         "start_date": start_d.strftime("%Y-%m-%d"),
@@ -53,16 +57,15 @@ def fetch_and_process_data(LAT, LON, start_d, end_d):
 
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()
+        response.raise_for_status() 
         data = response.json()
     except requests.exceptions.RequestException as e:
-        st.error(f"Errore API Meteo: {e}")
+        st.error(f"Errore API Meteo durante la richiesta: {e}.")
         return None
 
     hourly = data['hourly']
     
     # --- FIX CRITICO: CONTROLLO LUNGHEZZA ARRAY ---
-    # Questo trova la lunghezza minima e previene il ValueError dovuto a lunghezze non allineate.
     array_lengths = [len(v) for k, v in hourly.items() if k not in ['time', 'interval']]
     
     if not array_lengths:
@@ -92,7 +95,6 @@ def fetch_and_process_data(LAT, LON, start_d, end_d):
     df['accumulated_rain'] = df['rain'].cumsum()
     df['accumulated_snow'] = df['snowfall'].cumsum()
     
-    # Filtro orario per garantire che i dati corrispondano esattamente al range richiesto
     df = df[(df['time'] >= start_d.strftime("%Y-%m-%d")) & (df['time'] <= end_d.strftime("%Y-%m-%d") + " 23:59:59")]
     return df
 
@@ -102,7 +104,7 @@ def plot_meteogram(df, location_label, start_s, end_s):
     # Setup Grafico
     plt.rcParams['figure.dpi'] = 300 
     plt.rcParams['figure.figsize'] = [12, 28] 
-    
+
     try:
         plt.style.use('seaborn-v0_8-darkgrid')
     except:
@@ -113,29 +115,27 @@ def plot_meteogram(df, location_label, start_s, end_s):
     fig.suptitle(f'Previsioni: {location_label}\nDal {start_s} al {end_s}', fontsize=18, fontweight='bold')
 
     # 1. TEMPERATURA 
-    ax1.plot(df['time'], df['temp'], color='#d62728', marker='.', markersize=4, label='Temp')
-    ax1.plot(df['time'], df['dew_point'], color='#1f77b4', linestyle='--', label='Dew Point')
+    ax1.plot(df['time'], df['temp'], color='#d62728', marker='.', markersize=4, label='Temperatura Prevista')
+    ax1.plot(df['time'], df['dew_point'], color='#1f77b4', linestyle='--', label='Punto di Rugiada')
     ax1.axhline(0, color='gray', linestyle='-', linewidth=1) 
     ax1.yaxis.set_major_locator(MultipleLocator(5))
     ax1.set_title('1. Temperatura °C', loc='left', fontweight='bold')
     ax1.set_ylabel('°C')
     ax1.legend(loc='upper right', frameon=True)
-    ax1.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
-    # 2. NUVOLE (Stackplot originale del codice utente)
+    # 2. NUVOLE (Stackplot come richiesto)
     ax2.stackplot(df['time'], df['clouds_low'], df['clouds_mid'], df['clouds_high'], 
                   labels=['Basse', 'Medie', 'Alte'], colors=['#5f5f5f', '#969696', '#cccccc'], alpha=0.6)
-    ax2.set_ylim(0, 100)
+    ax2.set_ylim(0, 105) 
     ax2_twin = ax2.twinx() 
     ax2_twin.plot(df['time'], df['humidity'], color='blue', linestyle=':', label='Umidità')
-    ax2_twin.set_ylim(0, 100)
+    ax2_twin.set_ylim(0, 105) 
     ax2.set_ylabel('% Copertura')
     ax2_twin.set_ylabel('% Umidità', color='blue')
-    ax2.set_title('2. Strati nuvolosi', loc='left', fontweight='bold')
+    ax2.set_title('2. Strati Nuvole (Basse/Medie/Alte)', loc='left', fontweight='bold')
     ax2.legend(loc='upper left')
-    ax2.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
-    # 3. PRECIPITAZIONI
+    # 3. PRECIPITAZIONI ORARIE E ACCUMULO CUMULATIVO 
     bar_width = 0.035 
     ax3.bar(df['time'], df['rain'], width=bar_width, color='#17becf', label='Pioggia Oraria (mm)', align='center', alpha=0.9)
     ax3.bar(df['time'], df['snowfall'], width=bar_width, bottom=df['rain'], color='#b0c4de', label='Neve Oraria (cm)', align='center', alpha=0.95)
@@ -145,10 +145,8 @@ def plot_meteogram(df, location_label, start_s, end_s):
     ax3.yaxis.set_major_locator(MultipleLocator(5))
     ax3.set_ylabel('Quantità Oraria (mm/cm)')
     ax3_twin.set_ylabel('Accumulo Totale (mm/cm)', color='black')
-    ax3.set_title('3. Precipitazioni orarie e accumulo cumulativo (Step 5)', loc='left', fontweight='bold')
+    ax3.set_title('3. Precipitazioni Orarie e Accumulo Cumulativo (Step 5)', loc='left', fontweight='bold')
     ax3.legend(loc='upper left')
-    ax3_twin.legend(loc='lower right')
-    ax3.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
     # 4. VENTO
     ax4.plot(df['time'], df['wind_speed'], color='#2ca02c', label='Velocità Media', linewidth=2)
@@ -159,38 +157,37 @@ def plot_meteogram(df, location_label, start_s, end_s):
     ax4.set_ylabel('km/h')
     ax4_twin.set_yticks([0, 90, 180, 270, 360])
     ax4_twin.set_yticklabels(['N', 'E', 'S', 'W', 'N'])
-    ax4.set_title('4. Vento e raffiche', loc='left', fontweight='bold')
+    ax4.set_title('4. Vento e Raffiche (Step 10 km/h)', loc='left', fontweight='bold')
     ax4.legend(loc='upper left')
-    ax4.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
     # 5. PRESSIONE
-    ax5.plot(df['time'], df['pressure'], color='orange', linewidth=2, label='Pressione')
+    ax5.plot(df['time'], df['pressure'], color='orange', linewidth=2, label='Pressione Prevista (MSL)')
     ax5.yaxis.set_major_locator(MultipleLocator(2))
     ax5.set_ylabel('hPa')
-    ax5.set_title('5. Pressione atmosferica', loc='left', fontweight='bold')
-    ax5.axhline(1000, color='red', linestyle=':', alpha=0.6, label='1000 hPa')
+    ax5.set_title('5. Pressione Atmosferica (MSL - Step 2 hPa)', loc='left', fontweight='bold')
+    ax5.axhline(1000, color='red', linestyle=':', alpha=0.6, label='1000 hPa Riferimento')
     ax5.legend(loc='upper right')
-    ax5.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
     # 6. ZERO TERMICO
-    ax6.plot(df['time'], df['freezing_lvl'], color='red', label='Zero Termico')
+    ax6.plot(df['time'], df['freezing_lvl'], color='red')
     ax6.set_ylabel('Metri')
-    ax6.set_title('6. Quota zero termico', loc='left', fontweight='bold')
+    ax6.set_title('6. Quota Zero Termico', loc='left', fontweight='bold')
     ax6.legend()
-    ax6.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
-    # FORMATTAZIONE GLOBALE (Data)
-    all_axes = [ax1, ax2, ax3, ax4, ax5, ax6]
+    # --- FORMATTAZIONE GLOBALE ---
+    all_axes = [ax1, ax2, ax3, ax4, ax5, ax6] 
+    
     for ax in all_axes:
+        ax.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray')
+        ax.grid(False, axis='x')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b\n%H'))
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=12))
-        ax.tick_params(labelbottom=True)
+        ax.tick_params(labelbottom=True) 
         ax.tick_params(axis='x', labelsize=10)
 
     return fig
 
-
-# --- INTERFACCIA UTENTE (Spostata al corpo principale) ---
+# --- INTERFACCIA UTENTE ---
 st.title("🌍 Meteogrammi")
 st.markdown("Analisi dei vari parametri meteorologici.")
 
@@ -199,8 +196,10 @@ stop_exec = False
 final_lat = None
 final_lon = None
 location_name = "Località"
+today = date(2025, 11, 23)
+default_end_date = date(2025, 11, 25)
 
-# --- INPUT SECTION (NON PIÙ NELLA SIDEBAR) ---
+# --- INPUT SECTION ---
 st.header("1. Dove?")
 search_method = st.radio("Metodo:", ["🔍 Cerca Città", "📍 Coordinate"])
 
@@ -227,8 +226,6 @@ st.markdown("---")
 st.header("2. Quando?")
 
 col1, col2 = st.columns(2)
-today = date(2025, 11, 23)
-default_end_date = date(2025, 11, 25)
 
 start_date = col1.date_input("Dal:", today)
 end_date = col2.date_input("Al:", default_end_date)
@@ -247,14 +244,13 @@ if btn_generate and not stop_exec:
     if final_lat is None:
         st.error("Coordinate non valide.")
     else:
-        st.subheader(f"Analisi per: {location_name}")
+        st.subheader(f"Meteogramma per: {location_name}")
         with st.spinner("Elaborazione dati e generazione griglie..."):
             df_meteo = fetch_and_process_data(final_lat, final_lon, start_date, end_date)
 
             if df_meteo is not None and not df_meteo.empty:
                 
-                # 1. Genera e mostra il grafico (UNICO OUTPUT)
-                st.subheader(f"Grafico Dettagliato")
+                # SOLO GRAFICO
                 fig = plot_meteogram(df_meteo, location_name, start_date, end_date)
                 st.pyplot(fig)
 
