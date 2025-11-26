@@ -7,18 +7,31 @@ from matplotlib.ticker import MultipleLocator
 from datetime import date, timedelta
 import io
 import sys
-import numpy as np # Mantenuto solo se utile per le funzioni di plotting
+import numpy as np 
 
 # --- CONFIGURAZIONI GLOBALI ---
 st.set_page_config(layout="wide", page_title="Meteogrammi") 
 plt.rcParams['figure.dpi'] = 300 
-plt.rcParams['figure.figsize'] = [12, 28] 
+plt.rcParams['figure.figsize'] = [12, 35] # Manteniamo l'altezza aumentata
 try:
     plt.style.use('seaborn-v0_8-darkgrid')
 except:
     plt.style.use('ggplot')
 
 # --- FUNZIONI DI SERVIZIO ---
+
+# CLASSE MANTENUTA (NECESSARIA PER L'ASSE X)
+class CustomDateFormatter(mdates.DateFormatter):
+    """
+    Formatter personalizzato per l'asse X che mostra la data completa
+    solo a mezzanotte (00:00).
+    """
+    def __call__(self, x, pos=0):
+        dt = mdates.num2date(x, self.tz)
+        if dt.hour == 0 and dt.minute == 0: 
+            return dt.strftime('%d %b %H:%M') 
+        else:
+            return dt.strftime('%H:%M') 
 
 @st.cache_data
 def get_coordinates_from_city(city_name):
@@ -30,20 +43,16 @@ def get_coordinates_from_city(city_name):
         data = response.json()
         if "results" in data:
             result = data["results"][0]
-            # Percorso di SUCCESSO: Restituisce 5 valori
             return result["latitude"], result["longitude"], result["name"], result.get("country", ""), result.get("elevation", 0)
         else:
-            # Percorso di FALLIMENTO (Città non trovata): Restituisce 5 valori
             return None, None, None, None, 0
     except Exception:
-        # Percorso di ECCEZIONE (Errore di rete): Restituisce 5 valori
         return None, None, None, None, 0
 
 @st.cache_data(ttl=3600)
 def fetch_and_process_data(LAT, LON, start_d, end_d):
     """
     Scarica i dati meteo, trova la lunghezza minima comune e crea il DataFrame.
-    (FIX: Isola e allinea gli array per prevenire ValueError)
     """
 
     url = "https://api.open-meteo.com/v1/forecast"
@@ -76,7 +85,7 @@ def fetch_and_process_data(LAT, LON, start_d, end_d):
         
     min_length = min(array_lengths)
 
-    # Crea un DataFrame temporaneo con gli array troncati per facilità di calcolo
+    # Crea un DataFrame con gli array troncati e converti il tempo
     df_temp = pd.DataFrame({
         'time': pd.to_datetime(hourly['time'][:min_length]),
         'temp': hourly['temperature_2m'][:min_length],
@@ -96,79 +105,25 @@ def fetch_and_process_data(LAT, LON, start_d, end_d):
     
     # 2. CALCOLO FINALE E RETURN
     
-    # Calcolo Total Clouds (operazione su serie allineate)
     df_temp['clouds_total'] = df_temp['clouds_low'] + df_temp['clouds_mid'] + df_temp['clouds_high']
-    
     df_temp['accumulated_rain'] = df_temp['rain'].cumsum()
     df_temp['accumulated_snow'] = df_temp['snowfall'].cumsum()
     
-    # Applicazione del filtro data e ritorno
-    df_temp = df_temp[(df_temp['time'] >= start_d.strftime("%Y-%m-%d")) & (df_temp['time'] <= end_d.strftime("%Y-%m-%d") + " 23:59:59")]
+    # Filtra i dati in base al giorno
+    df_temp = df_temp[
+        (df_temp['time'].dt.date >= start_d) & 
+        (df_temp['time'].dt.date <= end_d)
+    ]
+    
+    # Riporta l'indice temporale per un plotting corretto
+    df_temp = df_temp.set_index('time')
     return df_temp
-    min_length = min(array_lengths)
-
-    # Tronca tutti gli array alla lunghezza minima per forzare l'allineamento
-    df = pd.DataFrame({
-        'time': pd.to_datetime(hourly['time'][:min_length]),
-        'temp': hourly['temperature_2m'][:min_length],
-        'dew_point': hourly['dew_point_2m'][:min_length],
-        'humidity': hourly['relative_humidity_2m'][:min_length],
-        'clouds_low': hourly['cloud_cover_low'][:min_length],
-        'clouds_mid': hourly['cloud_cover_mid'][:min_length],
-        'clouds_high': hourly['cloud_cover_high'][:min_length],
-        'pressure': hourly['surface_pressure'][:min_length],
-        'wind_speed': hourly['wind_speed_10m'][:min_length],
-        'wind_gusts': hourly['wind_gusts_10m'][:min_length],
-        'wind_dir': hourly['wind_direction_10m'][:min_length],
-        'rain': hourly['rain'][:min_length],
-        'snowfall': hourly['snowfall'][:min_length],
-        'freezing_lvl': hourly['freezing_level_height'][:min_length],
-        
-        # Calcoli Necessari per Grafici
-        'clouds_total': hourly['cloud_cover_low'][:min_length] + hourly['cloud_cover_mid'][:min_length] + hourly['cloud_cover_high'][:min_length],
-    })
-    
-    df['accumulated_rain'] = df['rain'].cumsum()
-    df['accumulated_snow'] = df['snowfall'].cumsum()
-    
-    df = df[(df['time'] >= start_d.strftime("%Y-%m-%d")) & (df['time'] <= end_d.strftime("%Y-%m-%d") + " 23:59:59")]
-    return df
-        
-    min_length = min(array_lengths)
-
-    # Tronca tutti gli array alla lunghezza minima per forzare l'allineamento
-    df = pd.DataFrame({
-        'time': pd.to_datetime(hourly['time'][:min_length]),
-        'temp': hourly['temperature_2m'][:min_length],
-        'dew_point': hourly['dew_point_2m'][:min_length],
-        'humidity': hourly['relative_humidity_2m'][:min_length],
-        # MANTENUTI STRATI NUVOLOSI PER PLOTTING
-        'clouds_low': hourly['cloud_cover_low'][:min_length],
-        'clouds_mid': hourly['cloud_cover_mid'][:min_length],
-        'clouds_high': hourly['cloud_cover_high'][:min_length],
-        'pressure': hourly['surface_pressure'][:min_length],
-        'wind_speed': hourly['wind_speed_10m'][:min_length],
-        'wind_gusts': hourly['wind_gusts_10m'][:min_length],
-        'wind_dir': hourly['wind_direction_10m'][:min_length],
-        'rain': hourly['rain'][:min_length],
-        'snowfall': hourly['snowfall'][:min_length],
-        'freezing_lvl': hourly['freezing_level_height'][:min_length]
-    })
-    
-    # Calcolo Total Clouds e Cumulative per i grafici
-    df['clouds_total'] = df['clouds_low'] + df['clouds_mid'] + df['clouds_high']
-    df['accumulated_rain'] = df['rain'].cumsum()
-    df['accumulated_snow'] = df['snowfall'].cumsum()
-    
-    df = df[(df['time'] >= start_d.strftime("%Y-%m-%d")) & (df['time'] <= end_d.strftime("%Y-%m-%d") + " 23:59:59")]
-    return df
 
 # --- 4. PLOTTING ---
+@st.cache_data
 def plot_meteogram(df, location_label, start_s, end_s, altitude):
     # Setup Grafico
-    plt.rcParams['figure.dpi'] = 300 
-    plt.rcParams['figure.figsize'] = [12, 28] 
-
+    
     try:
         plt.style.use('seaborn-v0_8-darkgrid')
     except:
@@ -176,57 +131,58 @@ def plot_meteogram(df, location_label, start_s, end_s, altitude):
         
     fig, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6, 1, sharex=True)
     
-    # Aumento la spaziatura verticale tra i subplots a 1.2 (separazione massima)
-    plt.subplots_adjust(hspace=1.2) 
+    # FIX LAYOUT: hspace 1.0 per spazio tra i grafici, bottom ridotto
+    plt.subplots_adjust(hspace=1.0, bottom=0.08, top=0.9) 
     
-    # Manteniamo y=0.99 per separare il titolo dal primo subplot
+    # FIX TITOLO
     fig.suptitle(f'Previsioni: {location_label}\nDal {start_s.strftime("%Y-%m-%d")} al {end_s.strftime("%Y-%m-%d")}', 
                  fontsize=18, 
                  fontweight='bold',
-                 y=0.94) 
+                 y=0.95) 
 
-    # --- Parametri Legenda (Separazione max) ---
-    LEGEND_BBOX = (0.5, -0.55) # Spinge la legenda molto in basso, fuori dall'area del grafico
+    # --- Parametri Legenda (Locazione: Sotto l'asse) ---
+    LEGEND_BBOX = (0.5, -0.4n) 
     LEGEND_LOC = 'upper center'
 
     # 1. TEMPERATURA 
-    ax1.plot(df['time'], df['temp'], color='#d62728', marker='.', markersize=4, label='Temperatura')
-    ax1.plot(df['time'], df['dew_point'], color='#1f77b4', linestyle='--', label='Temperatura di rugiada')
+    ax1.plot(df.index, df['temp'], color='#d62728', marker='.', markersize=4, label='Temperatura')
+    ax1.plot(df.index, df['dew_point'], color='#1f77b4', linestyle='--', label='Temperatura di rugiada')
     ax1.axhline(0, color='gray', linestyle='-', linewidth=1) 
     ax1.yaxis.set_major_locator(MultipleLocator(5))
     ax1.set_title('1. Temperatura °C', loc='left', fontweight='bold')
     ax1.set_ylabel('°C')
-    # MODIFICA: Legenda sotto il grafico
+    # RIPRISTINO LEGENDA SOTTO AX1
     ax1.legend(loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon=True, ncol=2) 
     ax1.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
     # 2. NUVOLE (Stackplot originale corretto)
-    ax2.stackplot(df['time'], df['clouds_low'], df['clouds_mid'], df['clouds_high'], 
+    ax2.stackplot(df.index, df['clouds_low'], df['clouds_mid'], df['clouds_high'], 
                   labels=['Basse', 'Medie', 'Alte'], colors=['#5f5f5f', '#969696', '#cccccc'], alpha=0.6)
     ax2.set_ylim(0, 105)
     ax2_twin = ax2.twinx() 
-    ax2_twin.plot(df['time'], df['humidity'], color='blue', linestyle=':', label='Umidità')
+    # Rinominata label per l'umidità per evitare sovrapposizioni con i colori dello stackplot
+    ax2_twin.plot(df.index, df['humidity'], color='blue', linestyle=':', label='Umidità') 
     ax2_twin.set_ylim(0, 105) 
     ax2.set_ylabel('% Copertura')
     ax2_twin.set_ylabel('% Umidità', color='blue')
     ax2.set_title('2. Strati Nuvole (Basse/Medie/Alte)', loc='left', fontweight='bold')
-    # MODIFICA: Legenda sotto il grafico
-    ax2.legend(loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon= True, ncol=3)
+    
+    # RIPRISTINO LEGENDA SOTTO AX2 (combinando nuvole e umidità)
+    h2_a, l2_a = ax2.get_legend_handles_labels()
+    h2_b, l2_b = ax2_twin.get_legend_handles_labels()
+    ax2.legend(h2_a + h2_b, l2_a + l2_b, loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon=True, ncol=4)
     ax2.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
 # 3. PRECIPITAZIONI 
     bar_width = 0.035 
     ax3_twin = ax3.twinx()
     
-    # 2. PLOT HOURLY BARS (On the Left/Primary Axis: ax3)
-    ax3.bar(df['time'], df['rain'], width=bar_width, color='#17becf', label='Pioggia oraria (mm)', align='center', alpha=0.9)
-    ax3.bar(df['time'], df['snowfall'], width=bar_width, bottom=df['rain'], color='pink', label='Neve oraria (cm)', align='center', alpha=0.95)
+    ax3.bar(df.index, df['rain'], width=bar_width, color='#17becf', label='Pioggia oraria (mm)', align='center', alpha=0.9)
+    ax3.bar(df.index, df['snowfall'], width=bar_width, bottom=df['rain'], color='pink', label='Neve oraria (cm)', align='center', alpha=0.95)
 
-    # 3. PLOT ACCUMULATION LINES (On the Right/Secondary Axis: ax3_twin)
-    ax3_twin.plot(df['time'], df['accumulated_rain'], color='#007fbf', label='Accumulo pioggia (mm)', linewidth=2)
-    ax3_twin.plot(df['time'], df['accumulated_snow'], color='#800080', label='Accumulo neve (cm)', linestyle='-', linewidth=2)
+    ax3_twin.plot(df.index, df['accumulated_rain'], color='#007fbf', label='Accumulo pioggia (mm)', linewidth=2)
+    ax3_twin.plot(df.index, df['accumulated_snow'], color='#800080', label='Accumulo neve (cm)', linestyle='-', linewidth=2)
 
-    # 4. SCALATURA E ETICHETTE (omissis)
     max_total_accum = df['accumulated_rain'].max() + df['accumulated_snow'].max()
     ax3_twin.set_ylim(0, max(10, max_total_accum * 1.1)) 
     ax3_twin.set_ylabel('') 
@@ -237,7 +193,6 @@ def plot_meteogram(df, location_label, start_s, end_s, altitude):
     ax3.yaxis.set_major_locator(MultipleLocator(2)) 
     ax3_twin.axhline(0, color='gray', linewidth=0.5, zorder=0)
 
-    # 5. TESTO CUMULATO (omissis)
     total_rain = df['accumulated_rain'].iloc[-1]
     total_snow = df['accumulated_snow'].iloc[-1]
     start_date_text = start_s.strftime('%d/%m')
@@ -254,190 +209,103 @@ def plot_meteogram(df, location_label, start_s, end_s, altitude):
              fontweight='bold',
              color='gray')
 
-    # 6. LEGENDS - COMBINATE
+    # RIPRISTINO LEGENDA SOTTO AX3
     ax3.set_title('3. Precipitazioni orarie e accumulo cumulativo', loc='left', fontweight='bold')
-    h1, l1 = ax3.get_legend_handles_labels()
-    h2, l2 = ax3_twin.get_legend_handles_labels()
-    
-    # MODIFICA: Legenda combinata sotto il grafico
-    ax3.legend(h1 + h2, l1 + l2, 
-               loc=LEGEND_LOC, 
-               bbox_to_anchor=LEGEND_BBOX, frameon = True, ncol=4) 
+    h3_a, l3_a = ax3.get_legend_handles_labels()
+    h3_b, l3_b = ax3_twin.get_legend_handles_labels()
+    ax3.legend(h3_a + h3_b, l3_a + l3_b, loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon=True, ncol=4)
     ax3.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray')
 
     # 4. VENTO
-    ax4.plot(df['time'], df['wind_speed'], color='#2ca02c', label='Velocità Media', linewidth=2)
-    ax4.plot(df['time'], df['wind_gusts'], color="#001fce", linestyle='--', label='Raffiche', linewidth=1.5)
+    ax4.plot(df.index, df['wind_speed'], color='#2ca02c', label='Velocità Media', linewidth=2)
+    ax4.plot(df.index, df['wind_gusts'], color="#001fce", linestyle='--', label='Raffiche', linewidth=1.5)
     ax4_twin = ax4.twinx()
-    ax4_twin.scatter(df['time'], df['wind_dir'], color='purple', s=15, label='Direz.')
+    # Usando un placeholder per la direzione per farla apparire in legenda, nonostante sia uno scatter
+    ax4_twin.plot([], [], color='purple', marker='o', linestyle='', label='Direzione Vento') 
+    ax4_twin.scatter(df.index, df['wind_dir'], color='purple', s=15) # Lo scatterplot mantiene la stessa logica di colore
     ax4.yaxis.set_major_locator(MultipleLocator(10))
     ax4.set_ylabel('km/h')
     ax4_twin.set_yticks([0, 90, 180, 270, 360])
     ax4_twin.set_yticklabels(['N', 'E', 'S', 'W', 'N'])
     ax4.set_title('4. Vento e raffiche', loc='left', fontweight='bold')
     
-    h1, l1 = ax4.get_legend_handles_labels()
-    h2, l2 = ax4_twin.get_legend_handles_labels()
-    
-    # MODIFICA: Legenda sotto il grafico
-    ax4.legend(h1 + h2, l1 + l2, 
-               loc=LEGEND_LOC, 
-               bbox_to_anchor=LEGEND_BBOX, frameon = True,
-               ncol=3) 
+    # RIPRISTINO LEGENDA SOTTO AX4
+    h4_a, l4_a = ax4.get_legend_handles_labels()
+    h4_b, l4_b = ax4_twin.get_legend_handles_labels()
+    ax4.legend(h4_a + h4_b, l4_a + l4_b, loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon=True, ncol=3) 
     ax4.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
   # 5. PRESSIONE ATMOSFERICA
     p_min_data = df['pressure'].min()
     p_max_data = df['pressure'].max()
     ax5.set_ylim(p_min_data - 5, p_max_data + 5)
-    ax5.plot(df['time'], df['pressure'], color='orange', linewidth=2, label='Pressione (MSL)')
+    
+    ax5.plot(df.index, df['pressure'], color='orange', linewidth=2, label='Pressione (MSL)')
+    
     ax5.yaxis.set_major_locator(MultipleLocator(2)) 
     ax5.set_ylabel('hPa')
     ax5.set_title('5. Pressione atmosferica', loc='left', fontweight='bold')
-    ax5.axhline(1013, color='red', linestyle=':', alpha=0.6, label='1013 hPa')
-    # MODIFICA: Legenda sotto il grafico
-    ax5.legend(loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon = True,  ncol=2)
+    ax5.axhline(1013, color='red', linestyle=':', alpha=0.6, label='1013 hPa (Std)')
+    # RIPRISTINO LEGENDA SOTTO AX5
+    ax5.legend(loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon=True, ncol=2)
     ax5.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
     # 6. ZERO TERMICO
-    ax6.plot(df['time'], df['freezing_lvl'], color='red', label='Zero Termico')
+    ax6.plot(df.index, df['freezing_lvl'], color='red', label='Zero Termico')
     ax6.axhline(altitude, color='blue', linestyle='--', alpha=0.6, label=f'Altitudine loc. ({altitude:.0f}m)')
     ax6.set_ylabel('Metri')
     ax6.set_title('6. Quota zero termico', loc='left', fontweight='bold')
-    # MODIFICA: Legenda sotto il grafico
-    ax6.legend(loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon = True,  ncol=2)
+    # RIPRISTINO LEGENDA SOTTO AX6
+    ax6.legend(loc=LEGEND_LOC, bbox_to_anchor=LEGEND_BBOX, frameon=True, ncol=2)
     ax6.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray') 
 
-   # --- FORMATTAZIONE GLOBALE (CON LOCATOR DINAMICO) ---
+   # --- FORMATTAZIONE GLOBALE ---
     all_axes = [ax1, ax2, ax3, ax4, ax5, ax6] 
     
-    # 1. Definizione di un Formatter Personalizzato
-    class CustomDateFormatter(mdates.DateFormatter):
-        def __call__(self, x, pos=0):
-            dt = mdates.num2date(x, self.tz)
-            if dt.hour == 0:
-                return dt.strftime('%d %b %H:%M') 
-            else:
-                return dt.strftime('%H:%M') 
-
-    # 2. CALCOLO E DEFINIZIONE DEL LOCATOR DINAMICO
+    # 2. CALCOLO E DEFINIZIONE DEL LOCATOR DINAMICO (Mantenuto)
     duration_days = (end_s - start_s).days + 1 
-    
+    # ... (restante codice di formattazione X axis invariato)
     if duration_days <= 1:
-        tick_interval = 1 
+        minor_hours = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     elif duration_days <= 3:
-        tick_interval = 3 
+        minor_hours = [3, 6, 9, 12, 15, 18, 21]
     else:
-        tick_interval = 6 
+        minor_hours = [6, 12, 18]
         
     for ax in all_axes:
         ax.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray')
         ax.grid(False, axis='x')
         
-        # 3. FREQUENZA DELLE ETICHETTE: USA IL VALORE DINAMICO CALCOLATO
-        ax.xaxis.set_major_locator(mdates.HourLocator(interval=tick_interval))
-        
-        # 4. FORMATTAZIONE DEL TESTO: Applica il formatter personalizzato
+        ax.xaxis.set_major_locator(mdates.DayLocator())
+        ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=minor_hours))
         ax.xaxis.set_major_formatter(CustomDateFormatter('%d %b %H:%M'))
+        ax.xaxis.set_minor_formatter(mdates.DateFormatter('%H:%M'))
         
-        ax.tick_params(labelbottom=True) 
-        ax.tick_params(axis='x', labelsize=10, rotation=65) 
-
-    # IMPORTANTE: tight_layout forza l'adattamento della figura alle legende esterne
-    #plt.tight_layout()
-
+        start_dt = pd.to_datetime(start_s.strftime("%Y-%m-%d 00:00:00"))
+        end_dt = pd.to_datetime(end_s.strftime("%Y-%m-%d 23:59:59")) 
+        ax.set_xlim(start_dt, end_dt) 
+        
+        ax.tick_params(axis='x', which='major', rotation=65, labelsize=10, labelbottom=True) 
+        ax.tick_params(axis='x', which='minor', rotation=65, labelsize=10, labelbottom=True)
+        
+    # NESSUNA CHIAMATA fig.legend QUI.
     return fig
-
-   # --- FORMATTAZIONE GLOBALE (CON LOCATOR DINAMICO) ---
-    all_axes = [ax1, ax2, ax3, ax4, ax5, ax6] 
-    
-    # 1. Definizione di un Formatter Personalizzato
-    class CustomDateFormatter(mdates.DateFormatter):
-        def __call__(self, x, pos=0):
-            dt = mdates.num2date(x, self.tz)
-            if dt.hour == 0:
-                # Se è mezzanotte, mostra Giorno, Mese e Ora:Minuto (su una riga)
-                return dt.strftime('%d %b %H:%M') 
-            else:
-                # Altrimenti, mostra solo l'Ora:Minuto
-                return dt.strftime('%H:%M') 
-
-    # 2. CALCOLO E DEFINIZIONE DEL LOCATOR DINAMICO
-    duration_days = (end_s - start_s).days + 1 
-    
-    if duration_days <= 1:
-        tick_interval = 1 # Ogni 1 ora
-    elif duration_days <= 3:
-        tick_interval = 3 # Ogni 3 ore
-    else:
-        tick_interval = 6 # Ogni 6 ore
-        
-    for ax in all_axes:
-        ax.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray')
-        ax.grid(False, axis='x')
-        
-        # 3. FREQUENZA DELLE ETICHETTE: USA IL VALORE DINAMICO CALCOLATO
-        ax.xaxis.set_major_locator(mdates.HourLocator(interval=tick_interval))
-        
-        # 4. FORMATTAZIONE DEL TESTO: Applica il formatter personalizzato
-        ax.xaxis.set_major_formatter(CustomDateFormatter('%d %b %H:%M'))
-        
-        ax.tick_params(labelbottom=True) 
-        # Rotazione a 65 gradi (Mantenuta)
-        ax.tick_params(axis='x', labelsize=10, rotation=65) 
-
-    # IMPORTANTE: tight_layout è essenziale per forzare l'adattamento della figura alle legende esterne
-    #plt.tight_layout()
-
-    return fig
-
-  # --- FORMATTAZIONE GLOBALE (Modifica) ---
-    all_axes = [ax1, ax2, ax3, ax4, ax5, ax6] 
-    
-    # 1. Definizione di un Formatter Personalizzato
-    # Questa classe controlla se l'ora è 00 per stampare giorno e mese.
-    class CustomDateFormatter(mdates.DateFormatter):
-        def __call__(self, x, pos=0):
-            dt = mdates.num2date(x, self.tz)
-            if dt.hour == 0:
-                # Se è mezzanotte, mostra Giorno e Ora
-                return dt.strftime('%d %b %H:%M')
-            else:
-                # Altrimenti, mostra solo l'Ora
-                return dt.strftime('%H:%M')
-
-    for ax in all_axes:
-        ax.grid(True, axis='y', which='major', linestyle='-', alpha=0.5, color='gray')
-        ax.grid(False, axis='x')
-        
-        # 2. FREQUENZA DELLE ETICHETTE: IMPOSTATA A OGNI 3 ORE
-        ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
-        
-        # 3. FORMATTAZIONE DEL TESTO: Applica il formatter personalizzato
-        ax.xaxis.set_major_formatter(CustomDateFormatter('%d %b\n%H'))
-        
-        ax.tick_params(labelbottom=True) 
-        # Rotazione a 45 gradi (mantenuta)
-        ax.tick_params(axis='x', labelsize=9, rotation=60) 
-
-    # Aggiungere un layout stretto per gestire la rotazione e la densità delle etichette
-    #plt.tight_layout()
-
-    return fig
-
-
-
-
 
 # --- INTERFACCIA UTENTE ---
 st.title("🌍 Meteogrammi per tutte le località")
 st.markdown("Analisi dei vari parametri meteorologici.")
 
 
+# Aggiunge spazio extra dopo il blocco iniziale
+st.text("") 
+st.text("") 
+st.text("") 
+
+
 # Inizializzazione per prevenire NameError
 btn_generate = False
 stop_exec = False
-location_altitude = 0 # INIZIALIZZAZIONE AGGIUNTA
+location_altitude = 0 
 final_lat = None
 final_lon = None
 location_name = "Località"
@@ -458,16 +326,13 @@ if search_method == "🔍 Cerca località":
             final_lat = lat_f
             final_lon = lon_f
             location_name = name_f
-            location_altitude = altitude_f # <--- CORREZIONE: Altitudine della località assegnata
-            # (Altitudine viene usata dal plot)
+            location_altitude = altitude_f 
         else:
             st.error("Città non trovata.")
 else:
-    # --- MODIFICA APPLICATA QUI: default a 0.0 ---
     final_lat = st.number_input("Latitudine", value=0.0, format="%.4f")
     final_lon = st.number_input("Longitudine", value=0.0, format="%.4f")
     location_name = st.text_input("Nome località", "Località")
-    # L'altitudine viene prelevata dall'input manuale se usi le coordinate
     location_altitude = st.number_input("Altitudine in metri (per grafico 6)", value=0, step=10)
 
 
@@ -499,7 +364,6 @@ st.text("")
 btn_generate = st.button("Genera previsione", type="primary")
 
 
-
 # --- OUTPUT ---
 if btn_generate and not stop_exec:
     if final_lat is None:
@@ -511,12 +375,15 @@ if btn_generate and not stop_exec:
 
             if df_meteo is not None and not df_meteo.empty:
                 
-                # 1. Genera e mostra il grafico (UNICO OUTPUT)
+                # 1. Grafico Dettagliato
                 st.subheader(f"Grafico Dettagliato")
                 fig = plot_meteogram(df_meteo, location_name, start_date, end_date, location_altitude)
                 st.pyplot(fig)
+                plt.close(fig) # Libera la memoria
 
                 st.markdown("---")
+                
+                # --- DOWNLOAD AREA ---
                 st.subheader("📥 Area Download")
                 col_dl1, col_dl2 = st.columns(2)
 
@@ -545,4 +412,3 @@ if btn_generate and not stop_exec:
                     )
             else:
                 st.warning("Nessun dato disponibile per il periodo selezionato.")
-
