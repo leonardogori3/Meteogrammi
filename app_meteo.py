@@ -113,7 +113,7 @@ def fetch_and_process_data(LAT, LON, start_d, end_d):
     df_temp = df_temp[
         (df_temp['time'].dt.date >= start_d) & 
         (df_temp['time'].dt.date <= end_d)
-    ]
+        ]
     
     # Riporta l'indice temporale per un plotting corretto
     df_temp = df_temp.set_index('time')
@@ -141,7 +141,7 @@ def plot_meteogram(df, location_label, start_s, end_s, altitude):
                  y=0.95) 
 
     # --- Parametri Legenda (Locazione: Sotto l'asse) ---
-    LEGEND_BBOX = (0.5, -0.4n) 
+    LEGEND_BBOX = (0.5, -0.4) 
     LEGEND_LOC = 'upper center'
 
     # 1. TEMPERATURA 
